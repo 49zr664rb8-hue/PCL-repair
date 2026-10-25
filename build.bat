@@ -1,79 +1,38 @@
 @echo off
-rem ============================================================================
-rem  PCL3 one-click build
+rem ===========================================================================
+rem  PCL one-click build   (keep this file ASCII-only and CRLF)
 rem
-rem  Layout this script expects (either one works):
-rem      <root>\PCL3\build.bat   +  <root>\PCL3-src\...        (current layout)
-rem      <root>\build.bat        +  <root>\PCL3-src\...
+rem  Layouts supported:
+rem    A) repo root      <root>\Plain Craft Launcher 2.sln
+rem    B) split layout   <root>\PCL3-src\Plain Craft Launcher 2.sln
 rem
-rem  Output: <root>\PCL3-src\Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe
-rem ============================================================================
+rem  Output: <src>\Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe
+rem ===========================================================================
 setlocal enabledelayedexpansion
 chcp 65001 >nul
 
-set "SLN="
-set "BASE="
+set "SRC="
+if exist "%~dp0Plain Craft Launcher 2.sln" set "SRC=%~dp0"
+if not defined SRC if exist "%~dp0..\PCL3-src\Plain Craft Launcher 2.sln" set "SRC=%~dp0..\PCL3-src\"
 
-rem ---- locate the solution: supports both layouts ----
-rem    A) repo root        <root>\Plain Craft Launcher 2.sln      （开源仓库的布局）
-rem    B) split layout     <root>\PCL3-src\Plain Craft Launcher 2.sln
-for %%R in ("%~dp0.." "%~dp0" "%~dp0..\..") do (
-    if not defined SLN (
-        if exist "%%~fR\PCL3-src\Plain Craft Launcher 2.sln" (
-            set "BASE=%%~fR"
-            set "SRC=%%~fR\PCL3-src"
-            set "SLN=%%~fR\PCL3-src\Plain Craft Launcher 2.sln"
-        )
-    )
-    if not defined SLN (
-        if exist "%%~fR\Plain Craft Launcher 2.sln" (
-            set "BASE=%%~fR"
-            set "SRC=%%~fR"
-            set "SLN=%%~fR\Plain Craft Launcher 2.sln"
-        )
-    )
-)
+if not defined SRC goto :nosln
 
+set "SLN=!SRC!Plain Craft Launcher 2.sln"
 echo ============================================================
-echo  PCL3 build
+echo  PCL build
 echo ============================================================
-if not defined SLN (
-    echo [ERROR] Cannot find the solution file.
-    echo         Looked for "Plain Craft Launcher 2.sln" under:
-    echo           %~dp0..
-    echo           %~dp0
-    echo.
-    echo         Run this script from the repository root (next to the .sln).
-    goto :fail
-)
 echo  solution : !SLN!
-set "VSW=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-set "MSB="
 
 echo.
 echo [1/3] Locating build tools ...
+set "VSW=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+set "MSB="
 if exist "%VSW%" (
     for /f "usebackq tokens=*" %%i in (`"%VSW%" -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe 2^>nul`) do set "MSB=%%i"
 )
-
-if not defined MSB (
-    rem Fallback: default install location of VS 2022 Build Tools
-    set "MSB=%ProgramFiles(x86)%\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
-    if not exist "!MSB!" set "MSB="
-)
-
-if not defined MSB (
-    echo [ERROR] Build tools not found.
-    echo.
-    echo         Install "Visual Studio Build Tools 2022" with the
-    echo         ".NET desktop build tools" workload, then run this again.
-    echo         Download: https://aka.ms/vs/17/release/vs_buildtools.exe
-    echo.
-    echo         NOTE: if the installer fails with exit code 5002, it is because
-    echo         both HTTPS_PROXY and https_proxy are set in the environment.
-    echo         Run the installer with the lowercase variants removed.
-    goto :fail
-)
+if not defined MSB set "MSB=%ProgramFiles(x86)%\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+if not exist "!MSB!" set "MSB="
+if not defined MSB goto :nomsb
 echo  compiler : !MSB!
 
 echo.
@@ -85,12 +44,8 @@ echo ------------------------------------------------------------
 
 echo.
 echo [3/3] Checking output ...
-set "EXE=!SRC!\Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe"
-if not exist "!EXE!" (
-    echo [ERROR] Build reported success but the exe is missing:
-    echo         !EXE!
-    goto :fail
-)
+set "EXE=!SRC!Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe"
+if not exist "!EXE!" goto :noexe
 for %%A in ("!EXE!") do set "SIZE=%%~zA"
 
 echo.
@@ -106,6 +61,28 @@ echo   2. double-click the exe
 echo.
 pause
 exit /b 0
+
+:nosln
+echo [ERROR] Cannot find "Plain Craft Launcher 2.sln".
+echo         Run this script from the repository root.
+goto :fail
+
+:nomsb
+echo [ERROR] Build tools not found.
+echo.
+echo         Install "Visual Studio 2022 Build Tools" with the
+echo         ".NET desktop build tools" workload, then run this again.
+echo         Download: https://aka.ms/vs/17/release/vs_buildtools.exe
+echo.
+echo         NOTE: if the installer fails with exit code 5002, it is because
+echo         both HTTPS_PROXY and https_proxy are set. Run it with the
+echo         lowercase variants removed.
+goto :fail
+
+:noexe
+echo [ERROR] Build reported success but the exe is missing.
+echo         !EXE!
+goto :fail
 
 :fail
 echo.
