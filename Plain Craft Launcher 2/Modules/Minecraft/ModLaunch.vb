@@ -28,6 +28,106 @@ Public Module ModLaunch
     ''' 尝试启动 Minecraft。必须在 UI 线程调用。
     ''' 返回是否实际开始了启动（如果没有，则一定弹出了错误提示）。
     ''' </summary>
+    ''' <summary>
+    ''' PCL3：打开 Minecraft 官方启动器。找不到时返回 False，由调用方回退。
+    ''' </summary>
+    Friend Function TryLaunchOfficialLauncher(Optional ShowLaunchTip As Boolean = True) As Boolean
+        '先把当前版本的游戏目录写进官方启动器的配置，否则它读的是 .minecraft 根目录，
+        '版本隔离下的 mod 和存档会「消失」
+        SyncOfficialLauncherProfile()
+        Try
+            '微软商店版：通过 AUMID 唤起
+            Dim PackageDir As String = IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Packages\Microsoft.4297127D64EC6_8wekyb3d8bbwe")
+            If IO.Directory.Exists(PackageDir) Then
+                Process.Start("explorer.exe", "shell:AppsFolder\Microsoft.4297127D64EC6_8wekyb3d8bbwe!Minecraft")
+                If ShowLaunchTip Then ShowOfficialLauncherTip()
+                Return True
+            End If
+            '旧版独立安装包
+            For Each ExePath As String In {
+                "C:\Program Files (x86)\Minecraft Launcher\MinecraftLauncher.exe",
+                "C:\Program Files\Minecraft Launcher\MinecraftLauncher.exe"}
+                If FileUtils.Exists(ExePath) Then
+                    Process.Start(ExePath)
+                    If ShowLaunchTip Then ShowOfficialLauncherTip()
+                    Return True
+                End If
+            Next
+            Logger.Warn("没有找到 Minecraft 官方启动器")
+            Return False
+        Catch ex As Exception
+            Logger.Warn(ex, "打开官方启动器失败")
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' PCL3：把当前版本写进官方启动器的 launcher_profiles.json，并指定 gameDir。
+    ''' 版本隔离开着时，mod、存档、config 都在 versions\<版本>\ 里，而官方启动器默认读 .minecraft 根目录，
+    ''' 不写这一条的话，在官方启动器里启动会看不到 mod 和存档。
+    ''' </summary>
+    Private Sub SyncOfficialLauncherProfile()
+        If McInstanceSelected Is Nothing Then Return
+        Try
+            Dim Indie As String = McInstanceSelected.PathIndie
+            '从 PathIndie 反推 MC 根目录：<根>\versions\<版本>\ → <根>\
+            Dim Root As String = Indie
+            Dim Index As Integer = Indie.IndexOf("\versions\", StringComparison.OrdinalIgnoreCase)
+            If Index > 0 Then Root = Indie.Substring(0, Index + 1)
+            Dim ProfilesPath As String = IO.Path.Combine(Root, "launcher_profiles.json")
+            If Not IO.File.Exists(ProfilesPath) Then
+                Logger.Warn($"没有找到 {ProfilesPath}，跳过同步官方启动器配置")
+                Return
+            End If
+            '先备份一次，方便回滚
+            Dim BackupPath As String = ProfilesPath & ".pcl3bak"
+            If Not IO.File.Exists(BackupPath) Then IO.File.Copy(ProfilesPath, BackupPath)
+
+            Dim Profiles As JObject = JObject.Parse(IO.File.ReadAllText(ProfilesPath))
+            Dim VersionName As String = McInstanceSelected.Name
+            Dim Key As String = "pcl3-" & VersionName.GetHashCode().ToString("x")
+            Dim Items As JObject = TryCast(Profiles("profiles"), JObject)
+            If Items Is Nothing Then
+                Items = New JObject()
+                Profiles("profiles") = Items
+            End If
+            Dim Entry As JObject = TryCast(Items(Key), JObject)
+            Dim Stamp As String = Date.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz")
+            If Entry Is Nothing Then
+                Entry = New JObject()
+                Entry("created") = Stamp
+                Entry("icon") = "Furnace"
+                Entry("type") = "custom"
+                Items(Key) = Entry
+            End If
+            Entry("name") = VersionName
+            Entry("lastVersionId") = VersionName
+            Entry("gameDir") = Indie.TrimEnd("\"c)
+            Entry("lastUsed") = Stamp
+
+            IO.File.WriteAllText(ProfilesPath, Profiles.ToString())
+            Logger.Info($"已同步官方启动器配置：{VersionName} → {Indie}")
+        Catch ex As Exception
+            '同步失败不影响启动，只是官方启动器会用默认目录
+            Logger.Warn(ex, "同步官方启动器配置失败，忽略")
+        End Try
+    End Sub
+
+
+    ''' <summary>
+    ''' PCL3：官方启动器没有「启动指定版本」的接口，最后一下必须在它里面点。
+    ''' 这里弹一个明确的提示，避免用户以为卡住了。
+    ''' </summary>
+    Private Sub ShowOfficialLauncherTip()
+        MyMsgBox(
+            "已打开 Minecraft 官方启动器。" & vbCrLf & vbCrLf &
+            "1. 在官方启动器里确认版本（PCL 已经自动帮你选好了）" & vbCrLf &
+            "2. 再次点击那边的「开始游戏」" & vbCrLf & vbCrLf &
+            "PCL 会自动对齐游戏目录，mod 和存档都在。",
+            "启动游戏")
+    End Sub
     Public Function McLaunchStart(Optional Options As McLaunchOptions = Nothing) As Boolean
         CurrentLaunchOptions = If(Options, New McLaunchOptions)
         '预检查
@@ -35,6 +135,16 @@ Public Module ModLaunch
         If McLaunchLoader.State = LoadState.Loading Then
             Hint("已有游戏正在启动中！", HintType.Red)
             Return False
+        End If
+        'PCL3：正版登录需要 Azure ClientId，而开源版把它删空了，自己注册又需要 Azure 订阅。
+        '这里改为把「启动」这一步交给官方启动器（它自带 ClientId，正版登录、Realms、披风都正常），
+        'PCL 继续负责下载、模组、联机。打不开官方启动器时自动回退到 PCL 自己启动，离线照常可用。
+        '只有正版登录才交给官方启动器；离线 / 统一通行证 / 外置登录都由 PCL 自己启动，
+        '因为官方启动器不认这些账号，送去那边反而玩不了。
+        If Settings.Get(Of McLoginType)("LoginType") = McLoginType.Ms AndAlso
+           LocalConfigGet("Launch.UseOfficialLauncher", "true").Trim().ToLowerInvariant() = "true" Then
+            If TryLaunchOfficialLauncher() Then Return True
+            Logger.Warn("未能打开官方启动器，回退到 PCL 自身启动")
         End If
         '强制切换需要启动的版本
         If CurrentLaunchOptions.Instance IsNot Nothing AndAlso McInstanceSelected <> CurrentLaunchOptions.Instance Then
@@ -881,6 +991,19 @@ LoginFinish:
     '微软登录步骤 1，原始登录：获取 DeviceCode 并开启登录网页
     Private Function MsLoginStep1New(Data As LoaderTask(Of McLoginMs, McLoginResult)) As (OAuthAccessToken As String, OAuthRefreshToken As String)
         '参考：https://learn.microsoft.com/zh-cn/entra/identity-platform/v2-oauth2-device-code
+
+        'PCL3：开源版把 PCL 自己的 Azure ClientId 删掉了，为空时微软直接返回 AADSTS900144
+        '（缺少 client_id），报错看不懂。这里提前给出可操作的提示。
+        If String.IsNullOrWhiteSpace(OAuthClientId) Then
+            Throw New Exception($"$还没有配置微软登录用的 ClientId，正版登录无法使用。{vbCrLf}{vbCrLf}" &
+                $"解决办法（免费，约 3 分钟）：{vbCrLf}" &
+                $"1. 打开 https://portal.azure.com ，进入 Microsoft Entra ID{vbCrLf}" &
+                $"2. 左侧「应用注册」→「新注册」，名称随便填{vbCrLf}" &
+                $"3. 账户类型必须选「仅个人 Microsoft 账户」{vbCrLf}" &
+                $"4. 注册完进入「身份验证」，把「允许公共客户端流」设为「是」并保存{vbCrLf}" &
+                $"5. 复制「应用程序(客户端) ID」，填到 PCL3.config.ini 的 MsClientId = 后面{vbCrLf}" &
+                $"6. 重启 PCL 再登录")
+        End If
 
         '初始请求
 Retry:

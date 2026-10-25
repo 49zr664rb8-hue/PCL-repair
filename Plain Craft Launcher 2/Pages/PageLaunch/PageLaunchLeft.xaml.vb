@@ -288,6 +288,15 @@ Public Class PageLaunchLeft
     ''' <summary>
     ''' 确认当前显示的子页面正确，并刷新该页面。
     ''' </summary>
+    ''' <summary>
+    ''' PCL3：正版登录是否可用（取决于有没有配置 Azure ClientId）。
+    ''' </summary>
+    Private ReadOnly Property MsLoginAvailable As Boolean
+        Get
+            Return Not String.IsNullOrWhiteSpace(OAuthClientId)
+        End Get
+    End Property
+
     Public Sub RefreshPage(KeepInput As Boolean, Anim As Boolean)
         '获取页面的可用种类并回写缓存
         Dim Type As PageType
@@ -299,6 +308,8 @@ Public Class PageLaunchLeft
         Else
             LoginPageType = Settings.Get(Of Integer)("LoginPageType")
         End If
+        'PCL3：正版登录选项保留，但没配 ClientId 时点进去是「用官方启动器」的引导页
+        '（见 PageLoginMs）。所以这里不再强制切到仅离线。
         Select Case LoginPageType
             Case 0 '正版或离线
 UnknownType:

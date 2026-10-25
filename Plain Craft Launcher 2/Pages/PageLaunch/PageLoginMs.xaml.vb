@@ -65,6 +65,16 @@ Public Class PageLoginMs
     End Function
 
     Private Sub BtnLogin_Click(sender As Object, e As EventArgs) Handles BtnLogin.Click
+        'PCL3：没有 ClientId 时 PCL 登不了正版，直接打开官方启动器让用户去那边登录
+        If String.IsNullOrWhiteSpace(OAuthClientId) Then
+            If ModLaunch.TryLaunchOfficialLauncher(ShowLaunchTip:=False) Then
+                MyMsgBox("已唤起 Minecraft 官方启动器。" & vbCrLf & vbCrLf &
+                         "请在官方启动器里登录微软账号，登录完成后关闭即可。", "正版登录")
+            Else
+                Hint("没有找到 Minecraft 官方启动器，请先安装", HintType.Red)
+            End If
+            Return
+        End If
         ComboAccounts.IsEnabled = False
         BtnLogin.IsEnabled = False
         BtnLogin.Text = "0%"

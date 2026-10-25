@@ -902,7 +902,8 @@ Public Class FormMain
             Logger.Error(ex, "切回窗口时出错")
         End Try
         '读取剪贴板，自动加入联机房间
-        Return 'TODO: 联机复活赛
+        'PCL3：上游在这里直接 Return 掉了（注释写着「联机复活赛」）。联机页恢复后这条也能用：
+        '朋友把地址复制下来、切回 PCL 就会弹窗问要不要加入。
         If PageLinkMain.LinkState <> PageLinkMain.LinkStates.Waiting Then Return '已启动联机
         If PageCurrent = PageType.Link Then Return '已在联机界面
         Dim Code = ClipboardGetText() : If Code Is Nothing Then Return '剪贴板无文本

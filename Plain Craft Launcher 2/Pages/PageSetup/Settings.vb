@@ -314,9 +314,11 @@ Public Class Settings
         Dim Value = Entry.GetCache(Instance)
         If Value IsNot Nothing Then Return Value
         '对部分设置强制赋值
+        'PCL3：上游把联机相关的两个开关强制写成 True（隐藏），改成 False，
+        '顺带把已经被旧逻辑写进配置里的值纠正回来。
         Static ForcedSettings As New Dictionary(Of String, Object) From {
-            {"UiHiddenPageLink", True},
-            {"UiHiddenSetupLink", True}
+            {"UiHiddenPageLink", False},
+            {"UiHiddenSetupLink", False}
         }
         Dim ForcedSetting As Object = Nothing
         If ForcedSettings.TryGetValue(Key, ForcedSetting) Then
