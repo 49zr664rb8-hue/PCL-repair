@@ -1,21 +1,116 @@
-'由于包含加解密等安全信息，本文件中的部分代码已被删除
+'本文件在上游开源版中被删减了部分内容（加解密、CDN 签名、更新与统计等）。
+'PCL3 修改版的处理原则：
+'  1. 不再硬编码任何密钥，全部改为从外部配置 / 环境变量读取；
+'  2. 原本被固定写死的功能开关（如 RestrictMcDownload）改为可配置项；
+'  3. 被上游删除的加解密逻辑不再伪造，改为直连或使用公开接口。
 
 Friend Module ModSecret
 
     '标注 PCL 的不同分支，仅用于替换标记
-    Public Const VersionBranchMain As String = "OpenSource"
+    Public Const VersionBranchMain As String = "Community"
     '在开源版的注册表与常规版的注册表隔离，以防数据冲突
     Public Const RegFolder As String = "PCLDebug"
-    '用于微软登录的 ClientId
-    Public OAuthClientId As String = If(Environment.GetEnvironmentVariable("PCL_MS_CLIENT_ID"), "")
-    'CurseForge API Key
-    Public CurseForgeAPIKey As String = If(Environment.GetEnvironmentVariable("PCL_CURSEFORGE_API_KEY"), "")
-    '用于匿名数据收集的腾讯云日志服务上报 URL，形如 https://{region}.cls.tencentcs.com/track?topic_id={topic_id}
+    '用于匿名数据收集的腾讯云日志服务上报 URL（开源版无此功能，保留为空）
     Public Const ClsBaseUrl As String = ""
+
+#Region "本地配置"
+
+    ''' <summary>
+    ''' 外部配置文件名，需与 PCL 本体放在同一目录。
+    ''' </summary>
+    Public Const LocalConfigFileName As String = "PCL3.config.ini"
+
+    Private LocalConfigCache As Dictionary(Of String, String) = Nothing
+
+    ''' <summary>
+    ''' 读取外部配置。惰性加载，整个进程只读一次文件。
+    ''' 格式为 key=value，支持 # ; ' 注释与 [Section] 分节；
+    ''' 分节内的键既能用「键名」也能用「节名.键名」访问。
+    ''' 优先级：环境变量 PCL3_xxx &gt; 配置文件 &gt; 默认值。
+    ''' </summary>
+    Friend Function LocalConfigGet(Key As String, Optional DefaultValue As String = "") As String
+        '环境变量优先，便于临时覆盖而不必改文件
+        Dim EnvValue As String = Environment.GetEnvironmentVariable("PCL3_" & Key.Replace(".", "_").ToUpper())
+        If Not String.IsNullOrWhiteSpace(EnvValue) Then Return EnvValue.Trim()
+        If LocalConfigCache Is Nothing Then LocalConfigLoad()
+        Dim Value As String = Nothing
+        If LocalConfigCache.TryGetValue(Key, Value) AndAlso Not String.IsNullOrWhiteSpace(Value) Then Return Value
+        Return If(DefaultValue, "")
+    End Function
+
+    Friend Function LocalConfigGetBool(Key As String, DefaultValue As Boolean) As Boolean
+        Dim Raw As String = LocalConfigGet(Key, If(DefaultValue, "true", "false")).Trim().ToLower()
+        Select Case Raw
+            Case "1", "true", "yes", "on", "是", "开", "启用"
+                Return True
+            Case "0", "false", "no", "off", "否", "关", "禁用"
+                Return False
+            Case Else
+                Return DefaultValue
+        End Select
+    End Function
+
+    Private Sub LocalConfigLoad()
+        LocalConfigCache = New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+        Try
+            Dim ConfigPath As String = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, LocalConfigFileName)
+            If Not FileUtils.Exists(ConfigPath) Then Return
+            Dim Lines As String() = FileUtils.TryReadAsLines(ConfigPath)
+            If Lines Is Nothing Then Return
+            Dim Section As String = ""
+            For Each RawLine As String In Lines
+                Dim Line As String = RawLine.Trim()
+                If Line.Length = 0 Then Continue For
+                If Line.StartsWith("#") OrElse Line.StartsWith(";") OrElse Line.StartsWith("'") Then Continue For
+                If Line.StartsWith("[") AndAlso Line.EndsWith("]") Then
+                    Section = Line.Substring(1, Line.Length - 2).Trim()
+                    Continue For
+                End If
+                Dim SplitIndex As Integer = Line.IndexOf("="c)
+                If SplitIndex <= 0 Then Continue For
+                Dim Key As String = Line.Substring(0, SplitIndex).Trim()
+                Dim Value As String = Line.Substring(SplitIndex + 1).Trim()
+                LocalConfigCache(Key) = Value
+                If Section.Length > 0 Then LocalConfigCache(Section & "." & Key) = Value
+            Next
+        Catch ex As Exception
+            Logger.Error(ex, "读取本地配置文件失败", LogBehavior.Toast)
+        End Try
+    End Sub
+
+#End Region
 
 #Region "网络鉴权"
 
-    Public Const RestrictMcDownload As Boolean = True
+    ''' <summary>
+    ''' 是否限制原版 Minecraft 下载。
+    ''' 上游开源版此处固定为 True，导致下载页被整体隐藏；本修改版改为读取配置，默认解锁。
+    ''' 下载来源仍然只有 Mojang 官方与 BMCLAPI 等公开镜像，本程序不托管任何游戏文件。
+    ''' </summary>
+    Public ReadOnly Property RestrictMcDownload As Boolean
+        Get
+            Return Not LocalConfigGetBool("Download.UnlockVanilla", True)
+        End Get
+    End Property
+
+    ''' <summary>
+    ''' 用于微软正版登录的 ClientId。需自行在 Azure 门户注册应用后填入，留空则微软登录不可用。
+    ''' </summary>
+    Public ReadOnly Property OAuthClientId As String
+        Get
+            Return LocalConfigGet("Auth.MsClientId", Environment.GetEnvironmentVariable("PCL_MS_CLIENT_ID"))
+        End Get
+    End Property
+
+    ''' <summary>
+    ''' CurseForge API Key。留空则 CurseForge 源不可用（会自动回退到 Modrinth），Modrinth 本身无需密钥。
+    ''' </summary>
+    Public ReadOnly Property CurseForgeAPIKey As String
+        Get
+            Return LocalConfigGet("Auth.CurseForgeApiKey", Environment.GetEnvironmentVariable("PCL_CURSEFORGE_API_KEY"))
+        End Get
+    End Property
+
     Friend Function SecretCdnSign(UrlWithMark As String) As String
         If Not UrlWithMark.EndsWithF("{CDN}") Then Return UrlWithMark
         Return UrlWithMark.Replace("{CDN}", "").Replace(" ", "%20")
@@ -34,7 +129,10 @@ Friend Module ModSecret
             End If
         End If
         If Not SimulateBrowserHeaders Then Req.Headers.Add("Referer", $"http://{VersionCode}.open.pcl2.server/")
-        If Url.Contains("api.curseforge.com") OrElse Url.Contains("forgecdn.net") Then Req.Headers.Add("x-api-key", CurseForgeAPIKey)
+        '未配置 CurseForge Key 时不发送空密钥，避免被服务端直接 403，从而能正常回退到 Modrinth
+        If (Url.Contains("api.curseforge.com") OrElse Url.Contains("forgecdn.net")) AndAlso Not String.IsNullOrWhiteSpace(CurseForgeAPIKey) Then
+            Req.Headers.Add("x-api-key", CurseForgeAPIKey)
+        End If
     End Sub
 
 #End Region

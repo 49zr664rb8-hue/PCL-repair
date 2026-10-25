@@ -195,21 +195,26 @@ Public Module ModDownload
     ''' </summary>
     Public DlClientListLoader As New LoaderTask(Of String, DlClientListResult)("DlClientList Main", AddressOf DlClientListMain)
     Private Sub DlClientListMain(Loader As LoaderTask(Of String, DlClientListResult))
+        'PCL3：在每个优先级链的末尾追加 Mojang piston-meta（version_manifest_v2）作为第三条独立通路。
+        '它与 launchermeta 属于不同的主机名，当其中一个被网络问题或攻击波及而不可用时，版本列表仍能获取。
         Select Case Settings.Get(Of Integer)("ToolDownloadVersion")
             Case 0
                 DlSourceLoader(Loader, New List(Of KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)) From {
                     New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListBmclapiLoader, 30),
-                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListMojangLoader, 30 + 60)
+                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListMojangLoader, 30 + 60),
+                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListMojangV2Loader, 30 + 60 + 30)
                 }, Loader.IsForceRestarting)
             Case 1
                 DlSourceLoader(Loader, New List(Of KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)) From {
                     New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListMojangLoader, 5),
-                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListBmclapiLoader, 5 + 30)
+                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListBmclapiLoader, 5 + 30),
+                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListMojangV2Loader, 5 + 30 + 30)
                 }, Loader.IsForceRestarting)
             Case Else
                 DlSourceLoader(Loader, New List(Of KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)) From {
                     New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListMojangLoader, 60),
-                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListBmclapiLoader, 60 + 60)
+                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListBmclapiLoader, 60 + 60),
+                    New KeyValuePair(Of LoaderTask(Of String, DlClientListResult), Integer)(DlClientListMojangV2Loader, 60 + 60 + 30)
                 }, Loader.IsForceRestarting)
         End Select
         '提取所有 Drop 序数
@@ -288,6 +293,22 @@ Public Module ModDownload
             Loader.Output = New DlClientListResult With {.IsOfficial = False, .SourceName = "BMCLAPI", .Value = Json}
         Catch ex As Exception
             Throw New Exception("Minecraft BMCLAPI 版本列表解析失败（" & Json.ToString & "）", ex)
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' Minecraft 客户端 版本列表，Mojang piston-meta 源加载器（version_manifest_v2）。
+    ''' 与 launchermeta 属于不同的主机名，作为官方源的第二条独立通路。
+    ''' </summary>
+    Public DlClientListMojangV2Loader As New LoaderTask(Of String, DlClientListResult)("DlClientList MojangV2", AddressOf DlClientListMojangV2Main)
+    Private Sub DlClientListMojangV2Main(Loader As LoaderTask(Of String, DlClientListResult))
+        Dim Json As JObject = NetRequestByClientRetry("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", RequireJson:=True).DeserializeJson()
+        Try
+            Dim Versions As JArray = Json("versions")
+            If Versions Is Nothing OrElse Versions.Count < 10 Then Throw New Exception("获取到的版本列表长度不足")
+            Loader.Output = New DlClientListResult With {.IsOfficial = True, .SourceName = "Mojang 官方源（piston-meta）", .Value = Json}
+        Catch ex As Exception
+            Throw New Exception("Minecraft 官方 piston-meta 源版本列表解析失败", ex)
         End Try
     End Sub
 
