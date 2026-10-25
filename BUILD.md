@@ -188,3 +188,63 @@ MeloongCore 用了 C# 13 语法。升级 VS 2022 到 17.12+，或者用 .NET SDK
 
 **Q：`MySliderDot` 相关的编译错误**
 `Controls\MySliderDot.xaml.vb` 是上游误提交的半成品控件（依赖 `Logger.Warning`、`LogLevel.Hint`、`MathRange`、`SetTop` 等在任何版本里都不存在的 API），**它不在工程文件里**，不参与构建。如果你的工具把目录下所有 `.vb` 都扫进去了就会看到这些错误——按工程文件的 Compile 列表来就不会。
+
+---
+
+## 八、目录结构
+
+```
+<仓库根目录>
+├── README.md                  面向用户的说明
+├── README-upstream.md         上游 PCL 的原始 README
+├── NOTICE.md                  合规与署名
+├── BUILD.md                   本文件
+├── LICENCE                    上游许可证，勿改动
+├── PCL3.config.ini.example    配置模板
+├── build.bat                  一键构建
+├── Plain Craft Launcher 2.sln
+├── Plain Craft Launcher 2/    启动器源码
+├── MeloongCore/               子模块，锁定 4c60c296
+├── PCLCS/                     压缩包处理库
+├── patches/                   上游自带的版本补丁集
+├── patches-pcl3/              本改版相对上游的补丁，2 个
+└── tools/                     preflight / vbcheck / vb_sanity
+```
+
+---
+
+## 九、联机为什么改成 bore
+
+上游联机页基于 EasyTier，但它依赖的会合节点全部停服了：
+
+| 地址 | 结果 |
+|---|---|
+| `public.easytier.cn` / `public.easytier.top` | NXDOMAIN |
+| `uptime.easytier.cn`（节点列表 API） | NXDOMAIN |
+| `mc1.easytier.cn:55558`（PCL 自建） | DNS 可解析，TCP 超时 |
+
+没有会合节点，两个 NAT 后面的机器就无法互相发现，这是网络拓扑的硬限制，写死节点没有意义。
+
+**试过 IPv6 直连**：本机有公网 IPv6，理论上填 `[IPv6]:端口` 就能连。但实测被拦在光猫那一层
+（本机端口在听、防火墙已放行、`netstat` 看不到任何外部连接），移动宽带 + 光猫封入站。
+关掉光猫的 IPv6 防火墙能解决，但那会让家里所有设备暴露在公网，不值得。
+
+**最后选 bore**：单文件、免注册、公共节点可用，且只有房主需要运行。
+
+---
+
+## 十、验证记录
+
+| 项目 | 方法 | 结果 |
+|---|---|---|
+| 全量编译 | `tools/vbcheck.py`（Roslyn 编译 114 源文件 + 63 个 XAML 生成文件） | 0 错误 |
+| 构建 | 双击 `build.bat` | BUILD OK，约 5.9 MB |
+| 启动 | 实机运行，读 `PCL\Log1.txt` | 三阶段加载，零错误 |
+| 恢复下载 | 日志 `切换主要页面：Download` + `DlClientList Mojang` | 官方源 690ms |
+| 模组下载 | 日志 `Modrinth 搜索到了 40 个工程` | 免密钥可用 |
+| bore 隧道 | 本地起服务 → bore 打洞 → 从公网 curl 取到内容 | 端到端通过 |
+| 单文件分发 | 只放 exe + exe.config 到空目录启动 | 正常，三阶段 66/187/50ms |
+| 产物可复现 | 删掉 bin/obj 重新编译，比对 MD5 | 与发布版完全一致 |
+| 子模块 | 本地 `git clone` 后检查 | 301 个文件齐全 |
+
+**没验证的**：两台机器跑真实游戏（需要第二个人）、免费 bore 节点的长期稳定性。
