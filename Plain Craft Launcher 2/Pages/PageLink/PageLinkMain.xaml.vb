@@ -110,7 +110,7 @@ Public Class PageLinkMain
     '加入房间（客人）
     Private Shared LastCode As String = Nothing
     Public Shared Sub Join() Handles PanSelectJoin.MouseLeftButtonUp
-        Dim Code As String = MyMsgBoxInput("输入地址", "输入房主发给你的地址，形如 bore.pub:12345。",
+        Dim Code As String = MyMsgBoxInput("输入地址", "输入房主发给你的地址，形如 bore.pub:12345 或 [2604:a880:...]:12345。",
             HintText:=If(String.IsNullOrEmpty(LastCode), "", "使用上一次的地址"))
         If Not String.IsNullOrEmpty(LastCode) AndAlso Code IsNot Nothing AndAlso Code = "" Then Code = LastCode
         If Code Is Nothing Then Return
@@ -139,8 +139,10 @@ Public Class PageLinkMain
         If Code Is Nothing Then Return "地址为空！"
         Code = Code.Trim()
         If Code.Length = 0 Then Return "地址为空！"
-        If Not Code.StartsWithF("bore.pub:") Then Return "地址格式不对，应该是 bore.pub:端口，例如 bore.pub:12345"
-        Dim PortText As String = Code.Substring("bore.pub:".Length)
+        '支持两种写法：bore.pub:12345 和 [2604:a880:...]:12345
+        Dim SplitIndex As Integer = Code.LastIndexOf(":"c)
+        If SplitIndex <= 0 OrElse SplitIndex = Code.Length - 1 Then Return "地址格式不对，应该是 主机:端口"
+        Dim PortText As String = Code.Substring(SplitIndex + 1)
         Dim PortNumber As Integer
         If Not Integer.TryParse(PortText, PortNumber) OrElse PortNumber <= 0 OrElse PortNumber > 65535 Then
             Return "地址里的端口不对，应该是 1-65535 的数字"
@@ -448,7 +450,9 @@ Public Class PageLinkMain
             If Not Match.Success Then Match = Regex.Match(LogText, "bore\.pub:(\d+)")
             If Not Match.Success Then Match = Regex.Match(LogText, ":([0-9]{4,5})\s*$", RegexOptions.Multiline)
             If Match.Success Then
-                TunnelAddress = $"bore.pub:{Match.Groups(1).Value}"
+                '给朋友发实际连通的地址：bore.pub 的 IPv4 被封，发域名他解析到 IPv4 就卡住了
+                Dim HostPart As String = ServerTarget.Substring(0, ServerTarget.LastIndexOf(":"c))
+                TunnelAddress = $"{HostPart}:{Match.Groups(1).Value}"
                 Logger.Info($"隧道已建立：{TunnelAddress}")
                 Task.Progress = 1
                 Return
