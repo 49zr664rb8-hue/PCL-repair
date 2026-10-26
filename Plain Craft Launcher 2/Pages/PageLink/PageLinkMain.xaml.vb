@@ -390,8 +390,8 @@ Public Class PageLinkMain
                 Logger.Warn(ex, $"探测 bore.pub 的 {Family} 地址失败")
             End Try
         Next
-        Logger.Warn("bore.pub 的 IPv4 与 IPv6 都探测不通，交给 bore 自己解析")
-        Return "bore.pub"
+        Logger.Warn("bore.pub 的 IPv4 与 IPv6 都探测不通")
+        Return ""
     End Function
 
     ''' <summary>
@@ -412,6 +412,11 @@ Public Class PageLinkMain
         Dim ExePath As String = PathBoreDir & "bore.exe"
         'bore.pub 的 IPv4 在部分线路上不可达（TCP 直接超时），这里先探测哪个协议能通
         Dim ServerTarget As String = ResolveBoreServer()
+        If String.IsNullOrWhiteSpace(ServerTarget) Then
+            Throw New Exception("$连不上联机服务器 bore.pub。" & vbCrLf &
+                                "它的 IPv4 在国内部分线路被封，需要你的网络支持 IPv6。" & vbCrLf &
+                                "打开 https://test-ipv6.com/ 确认一下，没有 IPv6 就在光猫/路由器里开启。")
+        End If
         Dim Info As New ProcessStartInfo With {
             .FileName = ExePath,
             .Arguments = $"local {ServerPort} --to {ServerTarget}",
@@ -425,6 +430,9 @@ Public Class PageLinkMain
         Logger.Info($"启动隧道：bore local {ServerPort} --to {ServerTarget}")
         ProcessCore = New Process With {.StartInfo = Info}
         ProcessCore.Start()
+        'bore 的日志走 stdout（tracing 默认），stderr 通常是空的。
+        '两个流都接上，免得以后换版本又把输出丢了。
+        AttachReader(ProcessCore.StandardOutput)
         AttachReader(ProcessCore.StandardError)
         Dim Deadline As DateTime = Now.AddSeconds(30)
         Do While Now < Deadline
