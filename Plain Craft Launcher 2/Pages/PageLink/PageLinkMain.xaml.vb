@@ -370,12 +370,51 @@ Public Class PageLinkMain
     ''' <summary>
     ''' 启动 bore 并等待它分配公网端口。
     ''' </summary>
+
+    ''' <summary>
+    ''' 探测 bore.pub 的哪个协议可达，返回可以直接传给 --to 的地址。
+    ''' 优先 IPv4（绝大多数网络正常），不通再试 IPv6。
+    ''' </summary>
+    Private Function ResolveBoreServer() As String
+        For Each Family As Net.Sockets.AddressFamily In {Net.Sockets.AddressFamily.InterNetwork, Net.Sockets.AddressFamily.InterNetworkV6}
+            Try
+                For Each Addr As Net.IPAddress In Net.Dns.GetHostAddresses("bore.pub")
+                    If Addr.AddressFamily <> Family Then Continue For
+                    If Not CanConnect(Addr, 7835) Then Continue For
+                    Dim Text As String = Addr.ToString()
+                    If Family = Net.Sockets.AddressFamily.InterNetworkV6 Then Text = $"[{Text}]"
+                    Logger.Info($"bore 服务端可达：{Text}:7835")
+                    Return $"{Text}:7835"
+                Next
+            Catch ex As Exception
+                Logger.Warn(ex, $"探测 bore.pub 的 {Family} 地址失败")
+            End Try
+        Next
+        Logger.Warn("bore.pub 的 IPv4 与 IPv6 都探测不通，交给 bore 自己解析")
+        Return "bore.pub"
+    End Function
+
+    ''' <summary>
+    ''' 用 TCP 试探地址是否可达，超时 3 秒。
+    ''' </summary>
+    Private Function CanConnect(Addr As Net.IPAddress, Port As Integer) As Boolean
+        Try
+            Using Client As New Net.Sockets.TcpClient(Addr.AddressFamily)
+                Dim TaskConnect = Client.ConnectAsync(Addr, Port)
+                Return TaskConnect.Wait(3000) AndAlso Client.Connected
+            End Using
+        Catch
+            Return False
+        End Try
+    End Function
     Private Sub StartTunnel(Task As LoaderTask(Of Integer, Integer))
         UpdateLoadingPage("正在建立隧道……", "建立隧道")
         Dim ExePath As String = PathBoreDir & "bore.exe"
+        'bore.pub 的 IPv4 在部分线路上不可达（TCP 直接超时），这里先探测哪个协议能通
+        Dim ServerTarget As String = ResolveBoreServer()
         Dim Info As New ProcessStartInfo With {
             .FileName = ExePath,
-            .Arguments = $"local {ServerPort} --to bore.pub",
+            .Arguments = $"local {ServerPort} --to {ServerTarget}",
             .UseShellExecute = False,
             .CreateNoWindow = True,
             .RedirectStandardOutput = True,
@@ -383,7 +422,7 @@ Public Class PageLinkMain
             .StandardOutputEncoding = Encoding.UTF8,
             .StandardErrorEncoding = Encoding.UTF8
         }
-        Logger.Info($"启动隧道：bore local {ServerPort} --to bore.pub")
+        Logger.Info($"启动隧道：bore local {ServerPort} --to {ServerTarget}")
         ProcessCore = New Process With {.StartInfo = Info}
         ProcessCore.Start()
         AttachReader(ProcessCore.StandardError)
@@ -394,7 +433,12 @@ Public Class PageLinkMain
             If ProcessCore.HasExited Then
                 Throw New Exception($"$隧道程序意外退出（代码 {ProcessCore.ExitCode}）。{vbCrLf}近期输出：{vbCrLf}{BoreLogText()}")
             End If
-            Dim Match = Regex.Match(BoreLogText(), "bore\.pub:(\d+)")
+            Dim LogText As String = BoreLogText()
+            'bore 连上后一定会打印 remote_port=xxxxx，这条最可靠；
+            'IPv6 形式下 listening 行是 [地址]:7835:端口，所以不能只认 bore.pub:
+            Dim Match = Regex.Match(LogText, "remote_port=(\d+)")
+            If Not Match.Success Then Match = Regex.Match(LogText, "bore\.pub:(\d+)")
+            If Not Match.Success Then Match = Regex.Match(LogText, ":([0-9]{4,5})\s*$", RegexOptions.Multiline)
             If Match.Success Then
                 TunnelAddress = $"bore.pub:{Match.Groups(1).Value}"
                 Logger.Info($"隧道已建立：{TunnelAddress}")
@@ -420,6 +464,9 @@ Public Class PageLinkMain
                 Do
                     Dim Line As String = Reader.ReadLine()
                     If Line Is Nothing Then Exit Do
+                    'bore 会往输出里塞 ANSI 颜色控制字符（如 ESC[0m），
+                    '不清掉的话 "remote_port=12345" 中间会夹着转义序列，正则永远匹配不到
+                    Line = Regex.Replace(Line, ChrW(27) & "\[[0-9;]*[A-Za-z]", "")
                     SyncLock BoreLog
                         BoreLog.AppendLine(Line)
                         If BoreLog.Length > 8192 Then BoreLog.Remove(0, 4096)
